@@ -93,6 +93,61 @@ msgcli calendar list
 msgcli calendar availability --emails "colleague@company.com" --start "2024-01-20" --end "2024-01-21"
 ```
 
+## App-Only Auth (Client Credentials)
+
+For headless/agent use against an organizational tenant, msgcli can authenticate
+as an application instead of a user — no browser, no keyring, no `auth setup`.
+Set these environment variables (e.g. via direnv or a `.env` file):
+
+```bash
+export AZURE_TENANT_ID="..."
+export AZURE_CLIENT_ID="..."
+export AZURE_CLIENT_SECRET="..."
+export MSGCLI_MAILBOX="contact@example.com"   # optional default mailbox
+```
+
+When they are set, msgcli uses the OAuth2 client credentials grant
+(`scope=https://graph.microsoft.com/.default`) and they take precedence over
+any device-code accounts. Requirements on the Azure side:
+
+1. In your app registration, add **application** permissions (not delegated):
+   `Mail.Read` (or `Mail.ReadWrite`) and `Mail.Send`, then **Grant admin consent**.
+2. Create a client secret under **Certificates & secrets**.
+
+App tokens have no signed-in user, so every command targets an explicit
+mailbox: pass `--account <email>` or set `MSGCLI_MAILBOX`.
+
+```bash
+msgcli auth status                                   # verify credentials
+msgcli mail list --account contact@example.com      # read mail
+msgcli mail send --account contact@example.com --to "someone@example.com" --subject "Hi" --body "Hello"
+```
+
+### Pagination and search
+
+`mail list --limit N` transparently follows `@odata.nextLink` when N exceeds
+the Graph API page size (max 1000 per page for listings, default 10), so
+`--limit 5000` just works. Search the mailbox with `--query` (KQL syntax):
+
+```bash
+msgcli mail list --query "from:alice@example.com" --limit 500
+msgcli mail list --query "subject:invoice hasAttachments:true"
+```
+
+> ⚠️ `--query` uses Graph `$search`, which the server caps at roughly 250–275
+> results regardless of `--limit`, ranked by relevance — fine for lookups,
+> wrong for exhaustive exports. To enumerate completely, use `--before`/
+> `--after` (received date) and `--filter` (raw OData) instead, which paginate
+> without limit; note they only scan one folder (`--folder`, default inbox):
+
+```bash
+msgcli mail list --before 2026-04-20 --limit 3000                       # walk back in time
+msgcli mail list --after 2026-01-01 --filter "from/emailAddress/address eq 'a@b.com'"
+msgcli mail list --folder <folder-id> --limit 5000                      # any folder, incl. nested ones by ID
+```
+
+Calendar commands are not supported in app-only mode.
+
 ## Commands
 
 ### Authentication
@@ -111,6 +166,8 @@ msgcli calendar availability --emails "colleague@company.com" --start "2024-01-2
 |---------|-------------|
 | `msgcli mail list` | List messages (default: inbox, last 25) |
 | `msgcli mail get <id>` | Read a specific message |
+| `msgcli mail view <id>` | Render a message as HTML (inline images embedded) and open it in the browser (`--attachments` also downloads, links, and opens its attachments) |
+| `msgcli mail attachments <id>` | List a message's attachments (`--download <att-id>` or `--download-all` to save them) |
 | `msgcli mail send` | Send a new message |
 | `msgcli mail reply <id>` | Reply to a message |
 | `msgcli mail delete <id>` | Delete a message |
@@ -198,6 +255,10 @@ msgcli auth status
 |----------|-------------|
 | `MSGCLI_CLIENT_ID` | Azure client ID (alternative to `auth setup`) |
 | `MSGCLI_KEYRING_PASSWORD` | Keyring password for headless/CI environments |
+| `AZURE_TENANT_ID` | Tenant ID for app-only (client credentials) auth |
+| `AZURE_CLIENT_ID` | Client ID for app-only auth |
+| `AZURE_CLIENT_SECRET` | Client secret for app-only auth |
+| `MSGCLI_MAILBOX` | Default target mailbox in app-only mode (overridden by `--account`) |
 
 ## Building
 

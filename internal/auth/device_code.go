@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -197,8 +198,19 @@ func GetUserInfo(ctx context.Context, accessToken string) (*UserInfo, error) {
 	return &user, nil
 }
 
-// GetValidToken returns a valid access token for the given account, refreshing if needed
+// GetValidToken returns a valid access token for the given account, refreshing if needed.
+// When app-only credentials are set in the environment (AZURE_TENANT_ID,
+// AZURE_CLIENT_ID, AZURE_CLIENT_SECRET), they take precedence and the
+// config/keyring are bypassed entirely.
 func GetValidToken(ctx context.Context, alias string) (string, error) {
+	if AppAuthEnabled() {
+		creds, err := AppCredentialsFromEnv()
+		if err != nil {
+			return "", err
+		}
+		return creds.GetToken(ctx)
+	}
+
 	config, err := LoadConfig()
 	if err != nil {
 		return "", err
@@ -232,8 +244,18 @@ func GetValidToken(ctx context.Context, alias string) (string, error) {
 	return token.AccessToken, nil
 }
 
-// ResolveAccount returns the account alias to use, resolving default if needed
+// ResolveAccount returns the account alias to use, resolving default if needed.
+// In app-only mode the "account" is the target mailbox address (UPN), taken
+// from --account or the MSGCLI_MAILBOX environment variable.
 func ResolveAccount(accountFlag string) (string, error) {
+	if AppAuthEnabled() {
+		mailbox := cmp.Or(accountFlag, getEnv(EnvMailbox))
+		if mailbox == "" {
+			return "", errors.New("app-only auth requires a target mailbox - pass --account <email> or set " + EnvMailbox)
+		}
+		return mailbox, nil
+	}
+
 	if accountFlag != "" {
 		return accountFlag, nil
 	}

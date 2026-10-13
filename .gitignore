@@ -27,3 +27,25 @@ Thumbs.db
 
 # Config (contains client ID - not secret but user-specific)
 # Users should not commit their personal config
+
+# Downloaded mail attachments and mail exports (personal data)
+candidatures-attachments/
+candidatures-dev/
+candidatures-b2b/
+candidatures-stage-dev/
+candidatures*.json
+
+# Credentials
+.env
+.env.*
+.envrc
+factures/
+*.xlsx
+reconcile/text-index/
+reconcile/*.json
+factures-matched/
+
+# Local work kept out of the repo (invoice reconciliation, personal data)
+reconcile/
+*.zip
+.crush/

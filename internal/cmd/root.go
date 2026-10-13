@@ -28,7 +28,7 @@ func Execute() error {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&accountFlag, "account", "a", "", "Account alias to use (default: first configured)")
+	rootCmd.PersistentFlags().StringVarP(&accountFlag, "account", "a", "", "Account alias to use (default: first configured); target mailbox address in app-credential mode")
 	rootCmd.PersistentFlags().StringVarP(&outputFlag, "output", "o", "", "Output format: json or table (default: auto)")
 	rootCmd.PersistentFlags().BoolVar(&noInputFlag, "no-input", false, "Never prompt for input, fail if input needed")
 }
