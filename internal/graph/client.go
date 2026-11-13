@@ -52,6 +52,25 @@ func NewClient(account string) *Client {
 	}
 }
 
+// NewMailboxClient creates an app-only client bound to one mailbox
+// (/users/{mailbox}), with an explicit token source. It is used by the MCP
+// server, which decides per request which mailbox a caller may read.
+func NewMailboxClient(mailbox string, token func(ctx context.Context) (string, error)) *Client {
+	return &Client{
+		httpClient: &http.Client{},
+		account:    mailbox,
+		base:       "/users/" + url.PathEscape(mailbox),
+		baseURL:    baseURL,
+		token:      token,
+	}
+}
+
+// WithBaseURL overrides the Graph base URL (tests).
+func (c *Client) WithBaseURL(u string) *Client {
+	c.baseURL = u
+	return c
+}
+
 // GraphError represents an error response from the Graph API
 type GraphError struct {
 	Error struct {
@@ -89,6 +108,11 @@ func (c *Client) request(ctx context.Context, method, path string, body any, res
 // response body. The path may be either a path relative to the API base or an
 // absolute URL (as found in @odata.nextLink).
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	return c.doWithHeaders(ctx, method, path, body, nil)
+}
+
+// doWithHeaders is do with extra request headers (e.g. Prefer).
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body any, headers map[string]string) ([]byte, error) {
 	token, err := c.token(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("auth error: %w", err)
@@ -114,6 +138,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
