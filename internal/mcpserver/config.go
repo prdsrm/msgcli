@@ -26,7 +26,8 @@ const (
 	EnvRequiredScope   = "MCP_ENTRA_SCOPE"     // short scope name in `scp`, default "Mail.Read.MCP"
 	EnvScopeURI        = "MCP_ENTRA_SCOPE_URI" // full scope advertised to clients, e.g. api://<app-id>/Mail.Read.MCP
 	EnvAllowedUsers    = "MCP_ALLOWED_USERS"   // comma list of Entra object IDs (oid) and/or UPNs
-	EnvMailboxGrants   = "MCP_MAILBOX_GRANTS"  // optional extra mailboxes: "user=mbx1|mbx2;user2=mbx3"
+	EnvMailboxGrants   = "MCP_MAILBOX_GRANTS"  // optional extra mailboxes: "user=mbx1|mbx2;user2=*" (* = every mailbox)
+	EnvMailboxDomains  = "MCP_MAILBOX_DOMAINS" // optional comma list of domains every readable mailbox must belong to
 	EnvAuthMode        = "MCP_AUTH_MODE"       // "proxy" (default) or "direct"
 	EnvOAuthClientID   = "MCP_OAUTH_CLIENT_ID" // public client ID handed out by /oauth/register (proxy mode)
 	EnvRedirectAllowed = "MCP_OAUTH_REDIRECTS" // optional comma list of allowed redirect URI prefixes (proxy mode)
@@ -57,10 +58,32 @@ type Config struct {
 	AllowedUsers  []string // lower-cased oids or UPNs
 	// Grants maps an allowlisted identity (oid or UPN, lower-cased) to extra
 	// mailboxes it may read besides its own.
-	Grants      map[string][]string
-	AuthMode    AuthMode
-	ClientID    string
-	RedirectsOK []string
+	// The special mailbox "*" (AllMailboxes) grants every mailbox.
+	Grants map[string][]string
+	// MailboxDomains, when set, restricts every readable mailbox (own,
+	// granted or wildcard) to these domains (lower-cased).
+	MailboxDomains []string
+	AuthMode       AuthMode
+	ClientID       string
+	RedirectsOK    []string
+}
+
+// AllMailboxes in MCP_MAILBOX_GRANTS gives a user every mailbox.
+const AllMailboxes = "*"
+
+var (
+	// mailboxRe is a deliberately strict SMTP address shape: it is put in a
+	// Graph URL path (/users/{mailbox}), so no slashes, spaces or query chars.
+	mailboxRe = regexp.MustCompile(`^[a-z0-9._+'-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$`)
+	domainRe  = regexp.MustCompile(`^[a-z0-9-]+(\.[a-z0-9-]+)+$`)
+)
+
+func mailboxInDomains(m string, domains []string) bool {
+	if len(domains) == 0 {
+		return true
+	}
+	_, d, ok := strings.Cut(m, "@")
+	return ok && contains(domains, d)
 }
 
 var guidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -93,11 +116,19 @@ func configFrom(getenv func(string) string) (*Config, error) {
 	if c.AuthMode == "" {
 		c.AuthMode = AuthModeProxy
 	}
+	var errs []string
 	c.Audiences = splitList(getenv(EnvAudiences), false)
 	c.AllowedUsers = splitList(getenv(EnvAllowedUsers), true)
 	c.RedirectsOK = splitList(getenv(EnvRedirectAllowed), false)
+	for _, d := range splitList(getenv(EnvMailboxDomains), true) {
+		d = strings.TrimPrefix(d, "@")
+		if !domainRe.MatchString(d) {
+			errs = append(errs, fmt.Sprintf("%s: %q is not a domain", EnvMailboxDomains, d))
+			continue
+		}
+		c.MailboxDomains = append(c.MailboxDomains, d)
+	}
 
-	var errs []string
 	if c.PublicURL == "" {
 		errs = append(errs, EnvPublicURL+" is required")
 	} else if u, err := url.Parse(c.PublicURL); err != nil || u.Host == "" ||
@@ -137,6 +168,13 @@ func configFrom(getenv func(string) string) (*Config, error) {
 		}
 	}
 	c.Grants = grants
+	for user, mbxs := range grants {
+		for _, m := range mbxs {
+			if m != AllMailboxes && !mailboxInDomains(m, c.MailboxDomains) {
+				errs = append(errs, fmt.Sprintf("%s: %s (granted to %q) is outside %s", EnvMailboxGrants, m, user, EnvMailboxDomains))
+			}
+		}
+	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid MCP server configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
@@ -172,8 +210,8 @@ func parseGrants(s string) (map[string][]string, error) {
 			if m == "" {
 				continue
 			}
-			if !strings.Contains(m, "@") {
-				return nil, fmt.Errorf("%s: %q is not a mailbox address", EnvMailboxGrants, m)
+			if m != AllMailboxes && !mailboxRe.MatchString(m) {
+				return nil, fmt.Errorf("%s: %q is not a mailbox address (or *)", EnvMailboxGrants, m)
 			}
 			list = append(list, m)
 		}

@@ -61,7 +61,7 @@ type Tools struct {
 // --- inputs / outputs ---
 
 type MailboxArg struct {
-	Mailbox string `json:"mailbox,omitempty" jsonschema:"mailbox to read; defaults to your own. Other mailboxes only if explicitly granted"`
+	Mailbox string `json:"mailbox,omitempty" jsonschema:"mailbox address to read; defaults to your own. Other mailboxes only if granted (see whoami)"`
 }
 
 type MailListIn struct {
@@ -164,6 +164,9 @@ type WhoAmIOut struct {
 	UPN       string   `json:"upn"`
 	Name      string   `json:"name,omitempty"`
 	Mailboxes []string `json:"mailboxes"`
+	// AllMailboxes is true when any mailbox address may be passed.
+	AllMailboxes   bool     `json:"all_mailboxes"`
+	MailboxDomains []string `json:"mailbox_domains,omitempty"`
 }
 
 // Register adds the read-only tools to the server.
@@ -212,7 +215,7 @@ func (t *Tools) begin(ctx context.Context, req *mcp.CallToolRequest, tool, mailb
 	}
 	mbx, err := t.Policy.ResolveMailbox(id, mailbox)
 	if err != nil {
-		if errors.Is(err, ErrForbidden) {
+		if errors.Is(err, ErrForbidden) && !t.Policy.AllMailboxAccess(id) {
 			err = fmt.Errorf("%w: you may only read %s", ErrForbidden, strings.Join(t.Policy.Mailboxes(id), ", "))
 		}
 		finish(err)
@@ -236,7 +239,11 @@ func (t *Tools) whoami(ctx context.Context, req *mcp.CallToolRequest, _ struct{}
 		return nil, WhoAmIOut{}, err
 	}
 	done(nil)
-	return nil, WhoAmIOut{ObjectID: id.ObjectID, UPN: id.UPN, Name: id.Name, Mailboxes: t.Policy.Mailboxes(id)}, nil
+	return nil, WhoAmIOut{
+		ObjectID: id.ObjectID, UPN: id.UPN, Name: id.Name,
+		Mailboxes: t.Policy.Mailboxes(id), AllMailboxes: t.Policy.AllMailboxAccess(id),
+		MailboxDomains: t.Policy.domains,
+	}, nil
 }
 
 func (t *Tools) mailList(ctx context.Context, req *mcp.CallToolRequest, in MailListIn) (*mcp.CallToolResult, MailListOut, error) {

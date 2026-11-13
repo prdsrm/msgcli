@@ -310,12 +310,15 @@ use has no write method at all.
    scope in `scp` (app-only tokens are refused).
 4. The signed-in user must be on `MCP_ALLOWED_USERS` (Entra object IDs and/or
    UPNs). Anyone else gets `403`, even inside the tenant.
-5. Each user reads **only their own mailbox** (the token's UPN). Extra
-   mailboxes (e.g. a shared mailbox) must be granted per user with
-   `MCP_MAILBOX_GRANTS`.
+5. Each user reads **only their own mailbox** (the token's UPN) by default.
+   Extra mailboxes are granted per user with `MCP_MAILBOX_GRANTS`; the grant
+   `*` lets a user pass **any** mailbox address to the tools (e.g. for
+   directors and developers). Every mailbox must be a well-formed address and,
+   if `MCP_MAILBOX_DOMAINS` is set, belong to one of those domains. `whoami`
+   tells the caller what they may read.
 6. Mail is read with msgcli's **app-only** Graph credentials (`AZURE_*`).
 7. Every tool call is written to stdout as one JSON audit line (user oid/UPN,
-   tool, mailbox, arguments — never message bodies or tokens — outcome,
+   tool, target mailbox, arguments — never message bodies or tokens — outcome,
    duration). Denied sign-ins are logged as `access_denied`.
 
 #### Auth modes
@@ -345,7 +348,8 @@ clients send, and it has no dynamic client registration.
 | `MCP_ENTRA_SCOPE` | no | Delegated scope required in `scp` (default `Mail.Read.MCP`) |
 | `MCP_ENTRA_SCOPE_URI` | no | Full scope advertised to clients (default `api://<first audience>/<scope>`) |
 | `MCP_ALLOWED_USERS` | yes | Comma list of Entra object IDs (preferred, immutable) and/or UPNs |
-| `MCP_MAILBOX_GRANTS` | no | Extra mailboxes: `user=mbx1\|mbx2;user2=mbx3` (`user` = an allowlist entry) |
+| `MCP_MAILBOX_GRANTS` | no | Extra mailboxes: `user=mbx1\|mbx2;user2=*` (`user` = an allowlist entry; `*` = every mailbox) |
+| `MCP_MAILBOX_DOMAINS` | no | Comma list of domains every readable mailbox must belong to (recommended with `*`) |
 | `MCP_AUTH_MODE` | no | `proxy` (default) or `direct` |
 | `MCP_OAUTH_CLIENT_ID` | proxy | Public client ID returned by `/oauth/register` and required on `/oauth/authorize` |
 | `MCP_OAUTH_REDIRECTS` | no | Comma list of allowed redirect URI prefixes (defence in depth; Entra enforces its own list) |
@@ -374,10 +378,33 @@ Keep secrets in the host's secret store, never in the image or the repo.
      `MCP_OAUTH_CLIENT_ID` (one app serves as API and public client), or split
      into an API app and a client app if you prefer.
 2. **Graph credentials** (`AZURE_*`): an app with the `Mail.Read` *application*
-   permission (admin consent). Strongly recommended: restrict it to the
-   allowed mailboxes with an Exchange Online **RBAC for Applications** role
-   assignment (or an Application Access Policy), so a leaked secret cannot read
-   every mailbox in the tenant.
+   permission (admin consent).
+   - If nobody has a `*` grant, restrict that app to the allowed users'
+     mailboxes with an Exchange Online **RBAC for Applications** role
+     assignment (or an Application Access Policy), so a leaked secret cannot
+     read every mailbox in the tenant.
+   - With a `*` grant the app must be able to read **every** mailbox, so that
+     restriction is no longer possible (at most a scope covering all user
+     mailboxes). The tradeoff: the server's allowlist, Entra *Assignment
+     required* and the audit log become the only gates, and the
+     `AZURE_CLIENT_SECRET` is as sensitive as a global mail admin. Prefer a
+     certificate or managed/federated credential over a client secret, rotate
+     it, keep it only in the host's secret store, and watch the audit log.
+   - There is no `mailboxes_list` tool: listing users needs the
+     `User.Read.All` permission. Callers pass mailbox addresses directly.
+
+#### Example: directors and developers read every mailbox
+
+```
+MCP_ALLOWED_USERS=<director-1-oid>,<director-2-oid>,<developer-oid>
+MCP_MAILBOX_GRANTS=<director-1-oid>=*;<director-2-oid>=*;<developer-oid>=*
+MCP_MAILBOX_DOMAINS=<your-domain>
+```
+
+Later, the same rule could come from **Entra app roles** instead of env vars
+(e.g. `direction` and `developer` roles assigned in the enterprise app and
+read from the token's `roles` claim), so access changes in Entra without a
+redeploy.
 
 ### Run
 

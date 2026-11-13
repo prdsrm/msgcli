@@ -391,3 +391,55 @@ func TestOAuthProxy(t *testing.T) {
 		t.Fatalf("foreign redirect registration status = %d", resp.StatusCode)
 	}
 }
+
+func TestAllMailboxAccessEndToEnd(t *testing.T) {
+	const romeoOID = "00000000-0000-0000-0000-00000000000d"
+	h := newHarness(t, map[string]string{
+		EnvAllowedUsers:   thomasOID + "," + romeoOID + ",hugo@example.com",
+		EnvMailboxGrants:  thomasOID + "=*;" + romeoOID + "=*",
+		EnvMailboxDomains: "example.com",
+	}, nil)
+	romeo, err := h.connect(t, h.jwks.sign(t, validClaims(romeoOID, "romeo@example.com")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer romeo.Close()
+
+	who, isErr := call(t, romeo, "whoami", nil)
+	if isErr || who["all_mailboxes"] != true {
+		t.Fatalf("whoami: %v", who)
+	}
+	out, isErr := call(t, romeo, "mail_get", map[string]any{"mailbox": "Somebody.Else@example.com", "id": "m1"})
+	if isErr || out["mailbox"] != "somebody.else@example.com" {
+		t.Fatalf("all-mailbox read: %v", out)
+	}
+	if _, isErr = call(t, romeo, "mail_list", map[string]any{"mailbox": "x@other.com"}); !isErr {
+		t.Fatal("mailbox outside MCP_MAILBOX_DOMAINS must be refused")
+	}
+
+	hugo, err := h.connect(t, h.jwks.sign(t, validClaims(hugoOID, "hugo@example.com")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hugo.Close()
+	if _, isErr = call(t, hugo, "mail_list", map[string]any{"mailbox": "somebody.else@example.com"}); !isErr {
+		t.Fatal("a user without * must stay on their own mailbox")
+	}
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(h.audit.String()), "\n") {
+		var e map[string]any
+		_ = json.Unmarshal([]byte(line), &e)
+		if e["tool"] == "mail_get" && e["user_oid"] == romeoOID && e["mailbox"] == "somebody.else@example.com" && e["outcome"] == "ok" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("audit must record the target mailbox:\n%s", h.audit.String())
+	}
+	for _, c := range *h.calls {
+		if strings.Contains(c, "other.com") {
+			t.Fatalf("Graph called for a refused mailbox: %s", c)
+		}
+	}
+}

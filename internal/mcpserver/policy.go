@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -9,16 +10,34 @@ import (
 // the requested mailbox.
 var ErrForbidden = errors.New("forbidden")
 
+// ErrInvalidMailbox is returned for a malformed mailbox address.
+var ErrInvalidMailbox = errors.New("invalid mailbox")
+
 // Policy decides who may use the server and which mailboxes they may read.
 // Default: allowlisted users only, each limited to their own mailbox.
+// A grant of "*" lets a user read any mailbox (within MailboxDomains).
 type Policy struct {
 	allowed []string
 	grants  map[string][]string
+	domains []string
 }
 
 // NewPolicy builds the policy from the configuration.
 func NewPolicy(cfg *Config) *Policy {
-	return &Policy{allowed: cfg.AllowedUsers, grants: cfg.Grants}
+	return &Policy{allowed: cfg.AllowedUsers, grants: cfg.Grants, domains: cfg.MailboxDomains}
+}
+
+// AllMailboxAccess reports whether the identity may read every mailbox.
+func (p *Policy) AllMailboxAccess(id *Identity) bool {
+	if !p.Allowed(id) {
+		return false
+	}
+	for _, key := range []string{id.ObjectID, id.UPN} {
+		if key != "" && contains(p.grants[key], AllMailboxes) {
+			return true
+		}
+	}
+	return false
 }
 
 // Allowed reports whether the identity is on the allowlist, by object ID
@@ -35,7 +54,8 @@ func (p *Policy) Allowed(id *Identity) bool {
 	return false
 }
 
-// Mailboxes lists the mailboxes the identity may read: its own first.
+// Mailboxes lists the mailboxes the identity may read: its own first, then
+// explicit grants; "*" in the list means every mailbox.
 func (p *Policy) Mailboxes(id *Identity) []string {
 	if !p.Allowed(id) {
 		return nil
@@ -66,9 +86,16 @@ func (p *Policy) ResolveMailbox(id *Identity, requested string) (string, error) 
 		if id.UPN == "" {
 			return "", errors.New("token has no UPN; pass a mailbox explicitly")
 		}
-		return id.UPN, nil
+		requested = id.UPN
 	}
-	if contains(mbxs, requested) {
+	// Always a well-formed address: it becomes a Graph path segment.
+	if !mailboxRe.MatchString(requested) {
+		return "", fmt.Errorf("%w: %q is not a mailbox address", ErrInvalidMailbox, requested)
+	}
+	if !mailboxInDomains(requested, p.domains) {
+		return "", fmt.Errorf("%w: %s is outside the allowed domains", ErrForbidden, requested)
+	}
+	if requested == id.UPN || contains(mbxs, requested) || p.AllMailboxAccess(id) {
 		return requested, nil
 	}
 	return "", ErrForbidden
