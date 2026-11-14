@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -352,4 +354,32 @@ func (c *Client) SearchMessages(ctx context.Context, query string, top int) (*Li
 	path := c.base + "/messages" + params.ToQuery()
 
 	return GetPaged[Message](ctx, c, path, top)
+}
+
+// GetMessageBodyAsText retrieves a message with its body converted to plain
+// text by Exchange (Prefer: outlook.body-content-type="text").
+func (c *Client) GetMessageBodyAsText(ctx context.Context, messageID string) (*Message, error) {
+	path := fmt.Sprintf("%s/messages/%s", c.base, url.PathEscape(messageID))
+	raw, err := c.doWithHeaders(ctx, "GET", path, nil, map[string]string{
+		"Prefer": `outlook.body-content-type="text"`,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result Message
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// GetAttachmentMeta returns one attachment's metadata (no content).
+func (c *Client) GetAttachmentMeta(ctx context.Context, messageID, attachmentID string) (*Attachment, error) {
+	path := fmt.Sprintf("%s/messages/%s/attachments/%s?$select=id,name,contentType,size,isInline",
+		c.base, url.PathEscape(messageID), url.PathEscape(attachmentID))
+	var result Attachment
+	if err := c.Get(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
